@@ -15,11 +15,12 @@
 # limitations under the License.
 # Not yet PEP8 standardized
 
-import httplib2
+import bottle
 import json
 from lxml import etree
 import os
 import sys
+import webob
 
 TOP_DIR =  os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
                                         os.pardir,
@@ -33,297 +34,332 @@ from keystone import server
 from webtest import TestApp
 import unittest
 
-URL = 'http://localhost:8080/v1.0/'
+URL = '/v1.0/'
 
 
-def get_token(user, pswd, kind=''):
-        h = httplib2.Http(".cache")
+class KeystoneTest(unittest.TestCase):
+
+    def setUp(self):
+        self.app = bottle.default_app()
+
+    def _request(self, method, path, body=None, headers=None):
+        request = webob.Request.blank(path)
+        request.method = method or "GET"
+        request.headers = headers or {}
+        request.body = body
+        return request.get_response(self.app)
+
+    def _get(self, path, body=None, headers=None):
+        return self._request("GET", path, body, headers)
+
+    def _post(self, path, body=None, headers=None):
+        return self._request("POST", path, body, headers)
+
+    def _delete(self, path, body=None, headers=None):
+        return self._request("DELETE", path, body, headers)
+
+    def _get_token(self, user, pswd, kind=''):
         url = '%stoken' % URL
-        body = {"passwordCredentials": {"username": user,
-                                        "password": pswd}}
-        resp, content = h.request(url, "POST", body=json.dumps(body),
-                                  headers={"Content-Type": "application/json"})
-        content = json.loads(content)
+        body = json.dumps({
+            "passwordCredentials": {
+                "username": user,
+                "password": pswd,
+            },
+        })
+        headers = {
+            "Content-Type": "application/json",
+        }
+        response = self._post(url, body, headers)
+        content = json.loads(response.body)
         token = str(content['auth']['token']['id'])
         if kind == 'token':
             return token
         else:
-            return (resp, content)
+            return response
 
+    def _delete_token(self, token, auth_token):
+        url = '%stoken/%s' % (URL, token)
+        body = None
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": auth_token,
+        }
+        return self._delete(url, body, headers)
 
-def delete_token(token, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stoken/%s' % (URL, token)
-    resp, content = h.request(url, "DELETE", body='', \
-                            headers={"Content-Type": "application/json", \
-                                     "X-Auth-Token": auth_token})
-    return (resp, content)
+    def _create_tenant(self, tenantid, auth_token):
+        url = '%stenants' % (URL)
+        body = json.dumps({
+            "tenant": {
+                "id": tenantid,
+                "description": "A description ...",
+                "enabled": True,
+            },
+        })
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": auth_token,
+        }
+        return self._post(url, body, headers)
 
+    def _create_tenant_group(self, groupid, tenantid, auth_token):
+        url = '%stenant/%s/groups' % (URL,tenantid)
+        body = json.dumps({
+            "group": {
+                "id": groupid,
+                "description": "A description ...",
+            },
+        })
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": auth_token,
+        }
+        return self._post(url, body, headers)
 
-def create_tenant(tenantid, auth_token):
-    h = httplib2.Http(".cache")
+    def _delete_tenant(self, tenantid, auth_token):
+        url = '%stenants/%s' % (URL, tenantid)
+        body = None
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": auth_token,
+        }
+        return self._delete(url, body, headers)
 
-    url = '%stenants' % (URL)
-    body = {"tenant": {"id": tenantid,
-                       "description": "A description ...",
-                       "enabled": True}}
-    resp, content = h.request(url, "POST", body=json.dumps(body),
-                              headers={"Content-Type": "application/json",
-                                       "X-Auth-Token": auth_token})
-    return (resp, content)
+    def _delete_tenant_group(self, groupid, tenantid, auth_token):
+        url = '%stenant/%s/groups/%s' % (URL, tenantid, groupid)
+        body = None
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Token": auth_token,
+        }
+        return self._delete(url, body, headers)
 
-
-def create_tenant_group(groupid, tenantid, auth_token):
-    h = httplib2.Http(".cache")
-
-    url = '%stenant/%s/groups' % (URL,tenantid)
-    body = {"group": {"id": groupid,
-                       "description": "A description ..."
-                         }}
-    resp, content = h.request(url, "POST", body=json.dumps(body),
-                              headers={"Content-Type": "application/json",
-                                       "X-Auth-Token": auth_token})
-    return (resp, content)
-
-
-def delete_tenant(tenantid, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stenants/%s' % (URL, tenantid)
-    resp, content = h.request(url, "DELETE", body='{}',\
-                            headers={"Content-Type": "application/json",\
-                                     "X-Auth-Token": auth_token})
-    return (resp, content)
-
-
-def delete_tenant_group(groupid, tenantid, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stenant/%s/groups/%s' % (URL, tenantid, groupid)
-    resp, content = h.request(url, "DELETE", body='{}',\
-                            headers={"Content-Type": "application/json",\
-                                     "X-Auth-Token": auth_token})
-    return (resp, content)
-
-def get_token_xml(user, pswd, type=''):
-        h = httplib2.Http(".cache")
+    def _get_token_xml(self, user, pswd, type=''):
         url = '%stoken' % URL
         body = '<?xml version="1.0" encoding="UTF-8"?> \
                 <passwordCredentials \
                 xmlns="http://docs.openstack.org/idm/api/v1.0" \
                 password="%s" username="%s" \
                 tenantId="77654"/> ' % (pswd, user)
-        resp, content = h.request(url, "POST", body=body,\
-                                headers={"Content-Type": "application/xml",
-                                         "ACCEPT": "application/xml"})
-        dom = etree.fromstring(content)
+        headers = {
+            "Content-Type": "application/xml",
+            "Accept": "application/xml",
+        }
+        response = self._post(url, body, headers)
+        dom = etree.fromstring(response.body)
         root = dom.find("{http://docs.openstack.org/idm/api/v1.0}token")
         token_root = root.attrib
         token = str(token_root['id'])
         if type == 'token':
             return token
         else:
-            return (resp, content)
+            return response
+
+    def _delete_token_xml(token, auth_token):
+        url = '%stoken/%s' % (URL, token)
+        body = None
+        headers = {
+            "Content-Type": "application/xml",
+            "X-Auth-Token": auth_token,
+            "Accept": "application/xml",
+        }
+        return self._delete(url, body, headers)
+
+    def _create_tenant_xml(tenantid, auth_token):
+        url = '%stenants' % (URL)
+        body = '<?xml version="1.0" encoding="UTF-8"?> \
+                <tenant xmlns="http://docs.openstack.org/idm/api/v1.0" \
+                enabled="true" id="%s"> \
+                <description>A description...</description> \
+                </tenant>' % tenantid
+        headers = {
+            "Content-Type": "application/xml",
+            "X-Auth-Token": auth_token,
+            "Accept": "application/xml",
+        }
+        return self._post(url, body, headers)
+
+    def _create_tenant_group_xml(self, groupid, tenantid, auth_token):
+        url = '%stenant/%s/groups' % (URL,tenantid)
+        body = '<?xml version="1.0" encoding="UTF-8"?> \
+                <group xmlns="http://docs.openstack.org/idm/api/v1.0" \
+                 id="%s"> \
+                <description>A description...</description> \
+                </group>' % groupid
+        headers = {
+            "Content-Type": "application/xml",
+            "X-Auth-Token": auth_token,
+            "Accept": "application/xml",
+        }
+        return self._post(url, body, headers)
+
+    def _delete_tenant_xml(self, tenantid, auth_token):
+        url = '%stenants/%s' % (URL, tenantid)
+        body = None
+        headers = {
+            "Content-Type": "application/xml",
+            "X-Auth-Token": auth_token,
+            "Accept": "application/xml",
+        }
+        return self._delete(url, body, headers)
+
+    def _delete_tenant_group_xml(self, groupid, tenantid, auth_token):
+        url = '%stenant/%s/groups/%s' % (URL, tenantid, groupid)
+        body = None
+        headers = {
+            "Content-Type": "application/xml",
+            "X-Auth-Token": auth_token,
+            "Accept": "application/xml",
+        }
+        return self._delete(url, body, headers)
+
+    def _get_tenant(self):
+        return '1234'
+
+    def _get_user(self):
+        return '1234'
+
+    def _get_userdisabled(self):
+        return '1234'
+
+    def _get_auth_token(self):
+        return '999888777666'
+
+    def _get_exp_auth_token(self):
+        return '000999'
+
+    def _get_disabled_token(self):
+        return '999888777'
 
 
-def delete_token_xml(token, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stoken/%s' % (URL, token)
-    resp, content = h.request(url, "DELETE", body='',\
-                            headers={"Content-Type": "application/xml", \
-                                     "X-Auth-Token": auth_token,
-                                     "ACCEPT": "application/xml"})
-    return (resp, content)
-
-
-def create_tenant_xml(tenantid, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stenants' % (URL)
-    body = '<?xml version="1.0" encoding="UTF-8"?> \
-            <tenant xmlns="http://docs.openstack.org/idm/api/v1.0" \
-            enabled="true" id="%s"> \
-            <description>A description...</description> \
-            </tenant>' % tenantid
-    resp, content = h.request(url, "POST", body=body,\
-                              headers={"Content-Type": "application/xml",\
-                              "X-Auth-Token": auth_token,
-                              "ACCEPT": "application/xml"})
-    return (resp, content)
-
-
-def create_tenant_group_xml(groupid, tenantid, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stenant/%s/groups' % (URL,tenantid)
-    body = '<?xml version="1.0" encoding="UTF-8"?> \
-            <group xmlns="http://docs.openstack.org/idm/api/v1.0" \
-             id="%s"> \
-            <description>A description...</description> \
-            </group>' % groupid
-    resp, content = h.request(url, "POST", body=body,\
-                              headers={"Content-Type": "application/xml",\
-                              "X-Auth-Token": auth_token,
-                              "ACCEPT": "application/xml"})
-    return (resp, content)
-
-
-def delete_tenant_xml(tenantid, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stenants/%s' % (URL, tenantid)
-    resp, content = h.request(url, "DELETE", body='',\
-                            headers={"Content-Type": "application/xml",\
-                                     "X-Auth-Token": auth_token,
-                                     "ACCEPT": "application/xml"})
-    return (resp, content)
-
-
-def delete_tenant_group_xml(groupid, tenantid, auth_token):
-    h = httplib2.Http(".cache")
-    url = '%stenant/%s/groups/%s' % (URL, tenantid, groupid)
-    resp, content = h.request(url, "DELETE", body='',\
-                            headers={"Content-Type": "application/xml",\
-                                     "X-Auth-Token": auth_token,
-                                     "ACCEPT": "application/xml"})
-    return (resp, content)
-
-
-def get_tenant():
-    return '1234'
-
-
-def get_user():
-    return '1234'
-
-
-def get_userdisabled():
-    return '1234'
-
-
-def get_auth_token():
-    return '999888777666'
-
-
-def get_exp_auth_token():
-    return '000999'
-
-
-def get_disabled_token():
-    return '999888777'
-
-
-class server_test(unittest.TestCase):
+class ServerTest(KeystoneTest):
 
     #Given _a_ to make inherited test cases in an order.
     #here to call below method will call as last test case
 
     def test_get_version_json(self):
-        h = httplib2.Http(".cache")
-        url = URL
-        resp, content = h.request(url, "GET", body="",
-                                  headers={"Content-Type": "application/json"})
-        self.assertEqual(200, int(resp['status']))
-        self.assertEqual('application/json', resp['content-type'])
+        body = None
+        headers = {
+            "Content-Type": "application/json",
+        }
+        response = self._get(URL, body, headers)
+        self.assertEqual(200, response.status_int)
+        self.assertEqual('application/json', response.content_type)
 
     def test_get_version_xml(self):
-        h = httplib2.Http(".cache")
-        url = URL
-        resp, content = h.request(url, "GET", body="",
-                                headers={"Content-Type": "application/xml",
-                                         "ACCEPT": "application/xml"})
-        self.assertEqual(200, int(resp['status']))
-        self.assertEqual('application/xml', resp['content-type'])
+        body = None
+        headers = {
+            "Content-Type": "application/xml",
+            "Accept": "application/xml",
+        }
+        response = self._get(URL, body, headers)
+        self.assertEqual(200, response.status_int)
+        self.assertEqual('application/xml', response.content_type)
 
 
-class authorize_test(server_test):
+class AuthenticateTest(ServerTest):
 
     def setUp(self):
-        self.token = get_token('joeuser', 'secrete', 'token')
-        self.tenant = get_tenant()
-        self.user = get_user()
-        self.userdisabled = get_userdisabled()
-        self.auth_token = get_auth_token()
-        self.exp_auth_token = get_exp_auth_token()
-        self.disabled_token = get_disabled_token()
-
-
+        super(AuthenticateTest, self).setUp()
+        self.token = self._get_token('joeuser', 'secrete', 'token')
+        self.tenant = self._get_tenant()
+        self.user = self._get_user()
+        self.userdisabled = self._get_userdisabled()
+        self.auth_token = self._get_auth_token()
+        self.exp_auth_token = self._get_exp_auth_token()
+        self.disabled_token = self._get_disabled_token()
 
     def tearDown(self):
-        delete_token(self.token, self.auth_token)
+        self._delete_token(self.token, self.auth_token)
 
     def test_a_authorize(self):
-        resp, content = get_token('joeuser', 'secrete')
-        self.assertEqual(200, int(resp['status']))
-        self.assertEqual('application/json', resp['content-type'])
+        response = self._get_token('joeuser', 'secrete')
+        self.assertEqual(200, response.status_int)
+        self.assertEqual('application/json', response.content_type)
 
     def test_a_authorize_xml(self):
-        resp, content = get_token_xml('joeuser', 'secrete')
-        self.assertEqual(200, int(resp['status']))
-        self.assertEqual('application/xml', resp['content-type'])
+        response = self._get_token_xml('joeuser', 'secrete')
+        self.assertEqual(200, response.status_int)
+        self.assertEqual('application/xml', response.content_type)
 
     def test_a_authorize_user_disaabled(self):
-        h = httplib2.Http(".cache")
         url = '%stoken' % URL
-        body = {"passwordCredentials": {"username": "disabled",
-                                        "password": "self.tenant_group='test_tenant_group'secrete"}}
-        resp, content = h.request(url, "POST", body=json.dumps(body),
-                                headers={"Content-Type": "application/json"})
-        content = json.loads(content)
-        if int(resp['status']) == 500:
+        body = json.dumps({
+            "passwordCredentials": {
+                "username": "disabled",
+                "password": "self.tenant_group='test_tenant_group'secrete",
+            },
+        })
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        response = self._post(url, body, headers)
+        content = json.loads(response.body)
+        if response.status_int == 500:
             self.fail('IDM fault')
-        elif int(resp['status']) == 503:
+        elif response.status_int == 503:
             self.fail('Service Not Available')
-        self.assertEqual(403, int(resp['status']))
+        self.assertEqual(403, response.status_int)
 
     def test_a_authorize_user_disaabled_xml(self):
-        h = httplib2.Http(".cache")
         url = '%stoken' % URL
-
         body = '<?xml version="1.0" encoding="UTF-8"?> \
                 <passwordCredentials \
                 xmlns="http://docs.openstack.org/idm/api/v1.0" \
                 password="secrete" username="disabled" \
                 />'
-        resp, content = h.request(url, "POST", body=body,\
-                                  headers={"Content-Type": "application/xml",
-                                           "ACCEPT": "application/xml"})
-        content = etree.fromstring(content)
-        if int(resp['status']) == 500:
+        headers = {
+            "Content-Type": "application/xml",
+            "Accept": "application/xml",
+        }
+        response = self._post(url, body, headers)
+        content = etree.fromstring(response.body)
+        if response.status_int == 500:
             self.fail('IDM fault')
-        elif int(resp['status']) == 503:
+        elif response.status_int == 503:
             self.fail('Service Not Available')
-        self.assertEqual(403, int(resp['status']))
+        self.assertEqual(403, response.status_int)
 
     def test_a_authorize_user_wrong(self):
-        h = httplib2.Http(".cache")
         url = '%stoken' % URL
-        body = {"passwordCredentials": {"username-w": "disabled",
-                                        "password": "secrete"}}
-        resp, content = h.request(url, "POST", body=json.dumps(body),
-                                headers={"Content-Type": "application/json"})
-        content = json.loads(content)
-        if int(resp['status']) == 500:
+        body = json.dumps({
+            "passwordCredentials": {
+                "username-w": "disabled",
+                "password": "secrete",
+            },
+        })
+        headers = {
+            "Content-Type": "application/json",
+        }
+        response = self._post(url, body, headers)
+        content = json.loads(response.body)
+        if response.status_int == 500:
             self.fail('IDM fault')
-        elif int(resp['status']) == 503:
+        elif response.status_int == 503:
             self.fail('Service Not Available')
-        self.assertEqual(400, int(resp['status']))
+        self.assertEqual(400, response.status_int)
 
     def test_a_authorize_user_wrong_xml(self):
-        h = httplib2.Http(".cache")
         url = '%stoken' % URL
         body = '<?xml version="1.0" encoding="UTF-8"?> \
                 <passwordCredentials \
                 xmlns="http://docs.openstack.org/idm/api/v1.0" \
                 password="secrete" username-w="disabled" \
                 />'
-        resp, content = h.request(url, "POST", body=body,\
-                                 headers={"Content-Type": "application/xml",
-                                         "ACCEPT": "application/xml"})
-        content = etree.fromstring(content)
-        if int(resp['status']) == 500:
+        headers = {
+            "Content-Type": "application/xml",
+            "Accept": "application/xml",
+        }
+        response = self._post(url, body, headers)
+        content = etree.fromstring(response.body)
+        if response.status_int == 500:
             self.fail('IDM fault')
-        elif int(resp['status']) == 503:
+        elif response.status_int == 503:
             self.fail('Service Not Available')
-        self.assertEqual(400, int(resp['status']))
+        self.assertEqual(400, response.status_int)
 
 
-class validate_token(authorize_test):
+class validate_token(AuthenticateTest):
 
     def test_validate_token_true(self):
         h = httplib2.Http(".cache")
@@ -413,16 +449,17 @@ class validate_token(authorize_test):
         self.assertEqual('application/json', resp['content-type'])
 
 
-class tenant_test(unittest.TestCase):
+class tenant_test(KeystoneTest):
 
     def setUp(self):
-        self.token = get_token('joeuser', 'secrete', 'token')
-        self.tenant = get_tenant()
-        self.user = get_user()
-        self.userdisabled = get_userdisabled()
-        self.auth_token = get_auth_token()
-        self.exp_auth_token = get_exp_auth_token()
-        self.disabled_token = get_disabled_token()
+        super(tenant_test, self).setUp()
+        self.token = self._get_token('joeuser', 'secrete', 'token')
+        self.tenant = self._get_tenant()
+        self.user = self._get_user()
+        self.userdisabled = self._get_userdisabled()
+        self.auth_token = self._get_auth_token()
+        self.exp_auth_token = self._get_exp_auth_token()
+        self.disabled_token = self._get_disabled_token()
 
     def tearDown(self):
         resp, content = delete_tenant(self.tenant, self.auth_token)
@@ -1046,13 +1083,13 @@ class delete_tenant_test(tenant_test):
     class tenant_group_test(unittest.TestCase):
 
         def setUp(self):
-            self.token = get_token('joeuser', 'secrete', 'token')
-            self.tenant = get_tenant()
-            self.user = get_user()
-            self.userdisabled = get_userdisabled()
-            self.auth_token = get_auth_token()
-            self.exp_auth_token = get_exp_auth_token()
-            self.disabled_token = get_disabled_token()
+            self.token = self._get_token('joeuser', 'secrete', 'token')
+            self.tenant = self._get_tenant()
+            self.user = self._get_user()
+            self.userdisabled = self._get_userdisabled()
+            self.auth_token = self._get_auth_token()
+            self.exp_auth_token = self._get_exp_auth_token()
+            self.disabled_token = self._get_disabled_token()
             self.tenant_group = 'test_tenant_group'
 
         def tearDown(self):

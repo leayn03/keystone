@@ -49,13 +49,7 @@ from bottle import request
 from bottle import response
 from queryext import exthandler
 
-# If ../keystone/__init__.py exists, add ../ to Python search path, so that
-# it will override what happens to be installed in /usr/(local/)lib/python...
-POSSIBLE_TOPDIR = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
-                                   os.pardir,
-                                   os.pardir))
-if os.path.exists(os.path.join(POSSIBLE_TOPDIR, 'keystone', '__init__.py')):
-    sys.path.insert(0, POSSIBLE_TOPDIR)
+TOPDIR = os.path.join(os.path.dirname(__file__), "..")
 
 import keystone.logic.service as serv
 import keystone.logic.types.auth as auth
@@ -151,11 +145,11 @@ def wrap_error(func):
 @wrap_error
 def get_version_info():
     if is_xml_response():
-        resp_file = os.path.join(POSSIBLE_TOPDIR,
+        resp_file = os.path.join(TOPDIR,
                                  "keystone/content/version.xml.tpl")
         response.content_type = "application/xml"
     else:
-        resp_file = os.path.join(POSSIBLE_TOPDIR,
+        resp_file = os.path.join(TOPDIR,
                                  "keystone/content/version.json.tpl")
         response.content_type = "application/json"
     hostname = request.environ.get("SERVER_NAME")
